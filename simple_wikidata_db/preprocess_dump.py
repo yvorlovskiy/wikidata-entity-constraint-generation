@@ -25,8 +25,8 @@ def get_arg_parser():
     parser.add_argument('--input_file', type=str, required=True, help='path to gz wikidata json dump')
     parser.add_argument('--out_dir', type=str, required=True, help='path to output directory')
     parser.add_argument('--language_id', type=str, default='en', help='language identifier')
-    parser.add_argument('--processes', type=int, default=90, help="number of concurrent processes to spin off. ")
-    parser.add_argument('--batch_size', type=int, default=10000)
+    parser.add_argument('--processes', type=int, default=180, help="number of concurrent processes to spin off. ")
+    parser.add_argument('--batch_size', type=int, default=30000)
     parser.add_argument('--num_lines_read', type=int, default=-1,
                         help='Terminate after num_lines_read lines are read. Useful for debugging.')
     parser.add_argument('--num_lines_in_dump', type=int, default=-1, help='Number of lines in dump. If -1, we will count the number of lines.')

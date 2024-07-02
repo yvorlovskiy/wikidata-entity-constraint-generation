@@ -7,15 +7,20 @@ import ujson as json
 
 def jsonl_generator(fname):
     """ Returns generator for jsonl file """
-    for line in open(fname, 'r'):
-        line = line.strip()
-        if len(line) < 3:
-            d = {}
-        elif line[len(line) - 1] == ',':
-            d = json.loads(line[:len(line) - 1])
-        else:
-            d = json.loads(line)
-        yield d
+    with open(fname, 'r', encoding='utf-8', errors='ignore') as file:
+        for line in file:
+            line = line.strip()
+            if not line:  # Skip empty lines
+                continue
+            try:
+                if line[-1] == ',':
+                    d = json.loads(line[:-1])
+                else:
+                    d = json.loads(line)
+            except json.JSONDecodeError as e:
+                print(f"Error decoding JSON line: {e}")
+                continue
+            yield d
 
 def get_batch_files(fdir):
     """ Returns paths to files in fdir """
