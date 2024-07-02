@@ -5,6 +5,7 @@ from functools import partial
 from multiprocessing import Pool
 from tqdm import tqdm
 from fetching.utils import jsonl_generator, get_batch_files
+import json
 
 def get_arg_parser():
     parser = argparse.ArgumentParser()
@@ -145,6 +146,7 @@ def search_distributor(item, property_id, data_files, num_procs, max_depth, min_
     
     in_range_results = filter_results_by_count(current_results, min_group_size, max_group_size)
     over_results = filter_results_by_count(current_results, min_group_size=min_group_size * 2)
+    print(f'Current depth: {depth}')
     print(chain)
     print(in_range_results)
     
@@ -157,22 +159,50 @@ def search_distributor(item, property_id, data_files, num_procs, max_depth, min_
             seen_properties.add(new_property)
             seen_items.add(new_item)
             new_chain = chain + [[new_item, new_property]]
-            depth += 1
+            new_depth = depth + 1
             search_distributor(new_item, new_property, data_files, num_procs, max_depth, min_group_size, max_group_size, 
-                                depth=depth, seen_items=seen_items, seen_properties=seen_properties, chain=new_chain, 
+                                depth=new_depth, seen_items=seen_items, seen_properties=seen_properties, chain=new_chain, 
                                 valid_qids=valid_qids, filtered_data=filtered_data)
             
 
     return chain, in_range_results
 
+def convert_to_json_format(chain, results):
+    json_data = {}
+    current_key = ", ".join([f"{p}, {q}" for q, p in chain])
+    json_data[current_key] = {}
+
+    for property_id, items in results.items():
+        json_data[current_key][property_id] = {}
+        for item, count in items.items():
+            json_data[current_key][property_id][item] = {
+                "count": count,
+                "items": []  # We don't have access to item_groups here, so we'll leave this empty for now
+            }
+
+    return json_data
+
+def save_json_results(results, output_file):
+    with open(output_file, 'w') as f:
+        json.dump(results, f, indent=2)
+
 def main():
     parser = get_arg_parser()
+    parser.add_argument('--output', type=str, default='out.jsonl', help='Output JSON file path')
     args = parser.parse_args()
     data_files = get_batch_files(args.data)
     if args.test:
         data_files = data_files[:50]
     
-    results = search_distributor(args.item, args.property, data_files, args.num_procs, max_depth=args.max_depth, min_group_size=args.min_group_size, max_group_size=args.min_group_size*2)
+    result = search_distributor(args.item, args.property, data_files, args.num_procs, max_depth=args.max_depth, min_group_size=args.min_group_size, max_group_size=args.min_group_size*2)
+    
+    if result:
+        chain, results = result
+        json_results = convert_to_json_format(chain, results)
+        save_json_results(json_results, args.output)
+        print(f"Results saved to {args.output}")
+    else:
+        print("No results found.")
 
 if __name__ == "__main__":
     main()
