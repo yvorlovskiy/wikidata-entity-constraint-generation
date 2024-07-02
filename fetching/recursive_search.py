@@ -11,9 +11,10 @@ def get_arg_parser():
     parser.add_argument('--data', type=str, default='/data/yury/dump/entity_rels', help='path to output directory')
     parser.add_argument('--item', type=str, required=True, help='initial item value (e.g., Q6256 for country)')
     parser.add_argument('--property', type=str, required=True, help='initial property id (e.g., P31 for instance of)')
-    parser.add_argument('--num_procs', type=int, default=35, help='Number of processes')
+    parser.add_argument('--num_procs', type=int, default=50, help='Number of processes')
     parser.add_argument('--max_depth', type=int, default=3, help='Maximum recursive depth')
     parser.add_argument('--min_group_size', type=int, default=10, help='Minimum group size to consider')
+    parser.add_argument('--test', action='store_true', help='Run in test mode (process only first 50 files)')
     return parser
 
 def nested_dict():
@@ -33,7 +34,7 @@ def merge_dictionaries(dict_list):
                 merged[qid][prop].update(values)
     return merged
 
-def find_qids(item, property_id, filename):
+def find_qids(item, property_id, filename, valid_qids):
     triples = []
     try:
         for entry in jsonl_generator(filename):
@@ -41,8 +42,9 @@ def find_qids(item, property_id, filename):
                 print(f"Expected dict, but got {type(entry)}: {entry}")
                 continue
             if entry.get('property_id') == property_id and entry.get('value') == item:
-                qid = entry.get('qid')
-                triples.append((qid, property_id, item))
+                if not valid_qids or entry.get('qid') in valid_qids:
+                    qid = entry.get('qid')
+                    triples.append((qid, property_id, item))
     except Exception as e:
         print(f"Error processing file {filename}: {e}")
     return triples
@@ -74,12 +76,12 @@ def filter_results_by_count(filtered_results, min_group_size=10, max_group_size=
             filtered_property_bank[p] = filtered_q_counts
     return filtered_property_bank
 
-def next_q_p(item, property_id, data_files, num_procs, seen_properties={}, seen_items={}, min_group_size=20):
+def next_q_p(item, property_id, data_files, num_procs,  valid_qids, seen_properties={}, seen_items={}, min_group_size=20):
     print("First pass: Collecting triples")
     pool = Pool(processes=num_procs)
     triple_results = list(tqdm(
         pool.imap_unordered(
-            partial(find_qids, item, property_id),
+            partial(find_qids, item, property_id, valid_qids=valid_qids),
             data_files
         ),
         total=len(data_files)
@@ -108,9 +110,11 @@ def next_q_p(item, property_id, data_files, num_procs, seen_properties={}, seen_
     
     print("Filtering out seen items...")
     filtered_results = property_item_counts(merged_results, seen_items)
+    item_groups = {p: list(q_counts.keys()) for p, q_counts in filtered_results.items()}
+    print(item_groups)
+    return filtered_results, valid_qids, item_groups
     
-    return filtered_results, valid_qids
-
+  
 def search_distributor(item, property_id, data_files, num_procs, max_depth, min_group_size, max_group_size, depth=0, seen_items=None, seen_properties=None, chain=None, valid_qids=None):
     if depth >= max_depth:
         return 
@@ -118,9 +122,8 @@ def search_distributor(item, property_id, data_files, num_procs, max_depth, min_
     seen_items = seen_items or {item}
     seen_properties = seen_properties or {property_id}
     chain = chain or [[item, property_id]]
-    
     # Find next potential qs and ps to search
-    current_results, new_valid_qids = next_q_p(item, property_id, data_files, num_procs, seen_properties=seen_properties, seen_items=seen_items)
+    current_results, new_valid_qids, item_groups = next_q_p(item, property_id, data_files, num_procs, seen_properties=seen_properties, seen_items=seen_items, valid_qids=valid_qids)
     
     # If this is the first call, initialize valid_qids
     if valid_qids is None:
@@ -139,23 +142,25 @@ def search_distributor(item, property_id, data_files, num_procs, max_depth, min_
     
     for new_property, new_items in over_results.items():
         for new_item, count in new_items.items():
-            # Only proceed if the new item is in our valid_qids set
-            if new_item in valid_qids:
-                print(f"Adding to search: Property {new_property}, Item {new_item}, Count {count}")
-                seen_properties.add(new_property)
-                seen_items.add(new_item)
-                new_chain = chain + [[new_item, new_property]]
-                depth += 1
-                search_distributor(new_item, new_property, data_files, num_procs, max_depth, min_group_size, max_group_size, 
-                                   depth=depth, seen_items=seen_items, seen_properties=seen_properties, chain=new_chain, valid_qids=valid_qids)
-                break
- 
+            print(f"Adding to search: Property {new_property}, Item {new_item}, Count {count}")
+            seen_properties.add(new_property)
+            seen_items.add(new_item)
+            new_chain = chain + [[new_item, new_property]]
+            depth += 1
+            search_distributor(new_item, new_property, data_files, num_procs, max_depth, min_group_size, max_group_size, 
+                                depth=depth, seen_items=seen_items, seen_properties=seen_properties, chain=new_chain, valid_qids=valid_qids)
+            break
+
     return chain, in_range_results
+
+
 
 def main():
     parser = get_arg_parser()
     args = parser.parse_args()
     data_files = get_batch_files(args.data)
+    if args.test:
+        data_files = data_files[:50]
     
     results = search_distributor(args.item, args.property, data_files, args.num_procs, max_depth=args.max_depth, min_group_size=args.min_group_size, max_group_size=args.min_group_size*2)
     print(results)
