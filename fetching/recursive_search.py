@@ -1,4 +1,5 @@
 import argparse
+from math import floor
 from collections import defaultdict, Counter
 from functools import partial
 from multiprocessing import Pool
@@ -32,9 +33,8 @@ def merge_dictionaries(dict_list):
                 merged[qid][prop].update(values)
     return merged
 
-
 def find_qids(item, property_id, filename):
-    qid_bank = set()
+    triples = []
     try:
         for entry in jsonl_generator(filename):
             if not isinstance(entry, dict):
@@ -42,45 +42,42 @@ def find_qids(item, property_id, filename):
                 continue
             if entry.get('property_id') == property_id and entry.get('value') == item:
                 qid = entry.get('qid')
-                qid_bank.add(qid)
+                triples.append((qid, property_id, item))
     except Exception as e:
         print(f"Error processing file {filename}: {e}")
-    return qid_bank
+    return triples
 
-def find_properties(qid_bank, seen_properties, filename):
+def find_properties(valid_qids, seen_properties, filename):
     property_bank = defaultdict(Counter)
     try:
         for entry in jsonl_generator(filename):
             if not isinstance(entry, dict):
                 print(f"Expected dict, but got {type(entry)}: {entry}")
                 continue
-            if entry.get('qid') in qid_bank and entry.get('property_id') not in seen_properties:
+            if entry.get('qid') in valid_qids and entry.get('property_id') not in seen_properties:
                 property_bank[entry.get('property_id')][entry.get('value')] += 1
     except Exception as e:
         print(f"Error processing file {filename}: {e}")
     return property_bank
 
-def property_item_counts(property_bank, filename, seen_items={}):
+def property_item_counts(property_bank, seen_items={}):
     property_item_counts = {}
     for property, value_counts in property_bank.items():
         property_item_counts[property] = {qid: count for qid, count in value_counts.items() if qid not in seen_items}
-        
     return property_item_counts  
 
-def filter_results_by_count(filtered_results, min_group_size=10):
+def filter_results_by_count(filtered_results, min_group_size=10, max_group_size=1000):
     filtered_property_bank = {}
     for p, q_counts in filtered_results.items():
-        # Filter out Qs with counts over 50
-        filtered_q_counts = {q: count for q, count in q_counts.items() if count > min_group_size}
+        filtered_q_counts = {q: count for q, count in q_counts.items() if count >= min_group_size and count <= max_group_size}
         if filtered_q_counts:
             filtered_property_bank[p] = filtered_q_counts
     return filtered_property_bank
 
-
-def next_q_p(item, property_id, data_files, num_procs, seen_properties={}, seen_items={}):
-    print("First pass: Collecting QIDs")
+def next_q_p(item, property_id, data_files, num_procs, seen_properties={}, seen_items={}, min_group_size=20):
+    print("First pass: Collecting triples")
     pool = Pool(processes=num_procs)
-    qid_results = list(tqdm(
+    triple_results = list(tqdm(
         pool.imap_unordered(
             partial(find_qids, item, property_id),
             data_files
@@ -88,13 +85,14 @@ def next_q_p(item, property_id, data_files, num_procs, seen_properties={}, seen_
         total=len(data_files)
     ))
     
-    all_qids = merge_sets(qid_results)
-    print(f"Found {len(all_qids)} initial QIDs")
+    all_triples = [triple for sublist in triple_results for triple in sublist]
+    valid_qids = {triple[0] for triple in all_triples}
+    print(f"Found {len(valid_qids)} valid QIDs")
     
     print("Second pass: Collecting properties and values...")
     property_results = list(tqdm(
         pool.imap_unordered(
-            partial(find_properties, all_qids, seen_properties),
+            partial(find_properties, valid_qids, seen_properties),
             data_files
         ),
         total=len(data_files)
@@ -109,85 +107,58 @@ def next_q_p(item, property_id, data_files, num_procs, seen_properties={}, seen_
             merged_results[prop] += counter
     
     print("Filtering out seen items...")
-    seen_items = set()  # You might want to populate this with actually seen items
     filtered_results = property_item_counts(merged_results, seen_items)
-    filtered_results = filter_results_by_count(filtered_results, 20)
-    print(filtered_results)
-    return filtered_results
+    
+    return filtered_results, valid_qids
 
-def search_distributor(item, property_id, data_files, num_procs, max_depth, min_group_size):
-    seen_items = {item}
-    seen_properties = {property_id}
-    results = {}
+def search_distributor(item, property_id, data_files, num_procs, max_depth, min_group_size, max_group_size, depth=0, seen_items=None, seen_properties=None, chain=None, valid_qids=None):
+    if depth >= max_depth:
+        return 
     
-    for depth in range(max_depth):
-        print(f"Searching at depth {depth + 1}")
-        current_results = next_q_p(item, property_id, data_files, num_procs, seen_properties=seen_properties, seen_items=seen_items)
-        for new_property, items in current_results.items():
-            for new_item, count in items.items():
-                if count > min_group_size:
-                    print(f"Found significant group: Property {new_property}, Item {new_item}, Count {count}")
-                    if new_property not in results:
-                        results[new_property] = {}
-                    results[new_property][new_item] = count
-                    
-                    # Recursively search for this new item and property
-                    if count > min_group_size * 2:  # Example threshold for recursion
-                        print(f"Recursively searching for Property {new_property}, Item {new_item}")
-                        seen_properties.add(new_property)
-                        seen_items.add(new_item)
-                        nested_results = next_q_p(new_item, new_property, data_files, num_procs, seen_properties=seen_properties, seen_items=seen_items)
-                        # You might want to process or store nested_results here
-                        
-                        # Break for testing purposes
-                        print("Breaking after one iteration for testing")
-                        return results
+    seen_items = seen_items or {item}
+    seen_properties = seen_properties or {property_id}
+    chain = chain or [[item, property_id]]
     
-    return results
+    # Find next potential qs and ps to search
+    current_results, new_valid_qids = next_q_p(item, property_id, data_files, num_procs, seen_properties=seen_properties, seen_items=seen_items)
+    
+    # If this is the first call, initialize valid_qids
+    if valid_qids is None:
+        valid_qids = new_valid_qids
+    else:
+        # Intersect with existing valid_qids to maintain the initial condition
+        valid_qids = valid_qids.intersection(new_valid_qids)
+    
+    in_range_results = filter_results_by_count(current_results, min_group_size, max_group_size)
+    over_results = filter_results_by_count(current_results, min_group_size=min_group_size * 2)
+    print(chain)
+    print(in_range_results)
+    
+    if not over_results:
+        return chain, in_range_results
+    
+    for new_property, new_items in over_results.items():
+        for new_item, count in new_items.items():
+            # Only proceed if the new item is in our valid_qids set
+            if new_item in valid_qids:
+                print(f"Adding to search: Property {new_property}, Item {new_item}, Count {count}")
+                seen_properties.add(new_property)
+                seen_items.add(new_item)
+                new_chain = chain + [[new_item, new_property]]
+                depth += 1
+                search_distributor(new_item, new_property, data_files, num_procs, max_depth, min_group_size, max_group_size, 
+                                   depth=depth, seen_items=seen_items, seen_properties=seen_properties, chain=new_chain, valid_qids=valid_qids)
+                break
+ 
+    return chain, in_range_results
 
 def main():
     parser = get_arg_parser()
     args = parser.parse_args()
     data_files = get_batch_files(args.data)
     
-    results = search_distributor(args.item, args.property, data_files, args.num_procs, 1, 50)
+    results = search_distributor(args.item, args.property, data_files, args.num_procs, max_depth=args.max_depth, min_group_size=args.min_group_size, max_group_size=args.min_group_size*2)
     print(results)
-    # print("First pass: Collecting QIDs")
-    # pool = Pool(processes=args.num_procs)
-    # qid_results = list(tqdm(
-    #     pool.imap_unordered(
-    #         partial(find_qids, args.item, args.property),
-    #         data_files
-    #     ),
-    #     total=len(data_files)
-    # ))
-    
-    # all_qids = merge_sets(qid_results)
-    # print(f"Found {len(all_qids)} initial QIDs")
-    
-    # print("Second pass: Collecting properties and values...")
-    # property_results = list(tqdm(
-    #     pool.imap_unordered(
-    #         partial(find_properties, all_qids, {}),
-    #         data_files
-    #     ),
-    #     total=len(data_files)
-    # ))
-    # pool.close()
-    # pool.join()
-    
-    # merged_results = defaultdict(Counter)
-    
-    # for prop_dict in property_results:
-    #     for prop, counter in prop_dict.items():
-    #         merged_results[prop] += counter
-    
-    # print("Filtering out seen items...")
-    # seen_items = set()  # You might want to populate this with actually seen items
-    # filtered_results = property_item_counts(merged_results, seen_items)
-    # filtered_results = filter_results_by_count(filtered_results, 20)
-    # print(filtered_results)
-    
 
 if __name__ == "__main__":
     main()
