@@ -13,7 +13,7 @@ def get_arg_parser():
     parser.add_argument('--property', type=str, required=True, help='initial property id (e.g., P31 for instance of)')
     parser.add_argument('--num_procs', type=int, default=50, help='Number of processes')
     parser.add_argument('--max_depth', type=int, default=3, help='Maximum recursive depth')
-    parser.add_argument('--min_group_size', type=int, default=10, help='Minimum group size to consider')
+    parser.add_argument('--min_group_size', type=int, default=20, help='Minimum group size to consider')
     parser.add_argument('--test', action='store_true', help='Run in test mode (process only first 50 files)')
     return parser
 
@@ -49,18 +49,30 @@ def find_qids(item, property_id, filename, valid_qids):
         print(f"Error processing file {filename}: {e}")
     return triples
 
-def find_properties(valid_qids, seen_properties, filename):
-    property_bank = defaultdict(Counter)
+def filter_file(args):
+    filename, valid_qids = args
+    filtered_data = []
     try:
         for entry in jsonl_generator(filename):
             if not isinstance(entry, dict):
-                print(f"Expected dict, but got {type(entry)}: {entry}")
                 continue
-            if entry.get('qid') in valid_qids and entry.get('property_id') not in seen_properties:
-                property_bank[entry.get('property_id')][entry.get('value')] += 1
+            if entry.get('qid') in valid_qids:
+                filtered_data.append(entry)
     except Exception as e:
         print(f"Error processing file {filename}: {e}")
-    return property_bank
+    return filtered_data
+
+def filter_data_files(data_files, valid_qids, num_procs):
+    pool = Pool(processes=num_procs)
+    filtered_results = list(tqdm(
+        pool.imap_unordered(filter_file, [(filename, valid_qids) for filename in data_files]),
+        total=len(data_files),
+        desc="Filtering data files"
+    ))
+    pool.close()
+    pool.join()
+
+    return [item for sublist in filtered_results for item in sublist]
 
 def property_item_counts(property_bank, seen_items={}):
     property_item_counts = {}
@@ -76,54 +88,53 @@ def filter_results_by_count(filtered_results, min_group_size=10, max_group_size=
             filtered_property_bank[p] = filtered_q_counts
     return filtered_property_bank
 
-def next_q_p(item, property_id, data_files, num_procs,  valid_qids, seen_properties={}, seen_items={}, min_group_size=20):
-    print("First pass: Collecting triples")
-    pool = Pool(processes=num_procs)
-    triple_results = list(tqdm(
-        pool.imap_unordered(
-            partial(find_qids, item, property_id, valid_qids=valid_qids),
-            data_files
-        ),
-        total=len(data_files)
-    ))
+def next_q_p(item, property_id, data_files, filtered_data, num_procs, valid_qids=None, seen_properties={}, seen_items={}, min_group_size=20):
+    if valid_qids is None:
+        print("First pass: Collecting triples")
+        pool = Pool(processes=num_procs)
+        triple_results = list(tqdm(
+            pool.imap_unordered(
+                partial(find_qids, item, property_id, valid_qids=None),
+                data_files  # Use data_files here, not filtered_data
+            ),
+            total=len(data_files),
+            desc="Finding initial QIDs"
+        ))
+        pool.close()
+        pool.join()
+        
+        all_triples = [triple for sublist in triple_results for triple in sublist]
+        valid_qids = {triple[0] for triple in all_triples}
+        print(f"Found {len(valid_qids)} valid QIDs")
+        
+        # Filter data based on valid_qids if it hasn't been done yet
+        if filtered_data is None:
+            print("Filtering data files based on valid QIDs...")
+            filtered_data = filter_data_files(data_files, valid_qids, num_procs)
+    else:
+        print(f"Using {len(valid_qids)} pre-existing valid QIDs")
     
-    all_triples = [triple for sublist in triple_results for triple in sublist]
-    valid_qids = {triple[0] for triple in all_triples}
-    print(f"Found {len(valid_qids)} valid QIDs")
-    
-    print("Second pass: Collecting properties and values...")
-    property_results = list(tqdm(
-        pool.imap_unordered(
-            partial(find_properties, valid_qids, seen_properties),
-            data_files
-        ),
-        total=len(data_files)
-    ))
-    pool.close()
-    pool.join()
-    
-    merged_results = defaultdict(Counter)
-    
-    for prop_dict in property_results:
-        for prop, counter in prop_dict.items():
-            merged_results[prop] += counter
+    print("Collecting properties and values...")
+    property_bank = defaultdict(Counter)
+    for entry in tqdm(filtered_data, desc="Processing filtered data"):
+        if entry.get('qid') in valid_qids and entry.get('property_id') not in seen_properties:
+            property_bank[entry.get('property_id')][entry.get('value')] += 1
     
     print("Filtering out seen items...")
-    filtered_results = property_item_counts(merged_results, seen_items)
+    filtered_results = property_item_counts(property_bank, seen_items)
     item_groups = {p: list(q_counts.keys()) for p, q_counts in filtered_results.items()}
-    print(item_groups)
-    return filtered_results, valid_qids, item_groups
-    
-  
-def search_distributor(item, property_id, data_files, num_procs, max_depth, min_group_size, max_group_size, depth=0, seen_items=None, seen_properties=None, chain=None, valid_qids=None):
+    return filtered_results, valid_qids, item_groups, filtered_data
+
+def search_distributor(item, property_id, data_files, num_procs, max_depth, min_group_size, max_group_size, depth=0, seen_items=None, seen_properties=None, chain=None, valid_qids=None, filtered_data=None):
     if depth >= max_depth:
         return 
     
     seen_items = seen_items or {item}
     seen_properties = seen_properties or {property_id}
     chain = chain or [[item, property_id]]
+    
     # Find next potential qs and ps to search
-    current_results, new_valid_qids, item_groups = next_q_p(item, property_id, data_files, num_procs, seen_properties=seen_properties, seen_items=seen_items, valid_qids=valid_qids)
+    current_results, new_valid_qids, item_groups, filtered_data = next_q_p(item, property_id, data_files, filtered_data, num_procs, seen_properties=seen_properties, seen_items=seen_items, valid_qids=valid_qids)
     
     # If this is the first call, initialize valid_qids
     if valid_qids is None:
@@ -148,12 +159,11 @@ def search_distributor(item, property_id, data_files, num_procs, max_depth, min_
             new_chain = chain + [[new_item, new_property]]
             depth += 1
             search_distributor(new_item, new_property, data_files, num_procs, max_depth, min_group_size, max_group_size, 
-                                depth=depth, seen_items=seen_items, seen_properties=seen_properties, chain=new_chain, valid_qids=valid_qids)
-            break
+                                depth=depth, seen_items=seen_items, seen_properties=seen_properties, chain=new_chain, 
+                                valid_qids=valid_qids, filtered_data=filtered_data)
+            
 
     return chain, in_range_results
-
-
 
 def main():
     parser = get_arg_parser()
@@ -163,7 +173,6 @@ def main():
         data_files = data_files[:50]
     
     results = search_distributor(args.item, args.property, data_files, args.num_procs, max_depth=args.max_depth, min_group_size=args.min_group_size, max_group_size=args.min_group_size*2)
-    print(results)
 
 if __name__ == "__main__":
     main()
