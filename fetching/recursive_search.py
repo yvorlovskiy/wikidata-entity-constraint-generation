@@ -1,3 +1,5 @@
+# example:
+# python3 fetching/recursive_search.py --item Q6256 --property P31 --test --output out/out_instance_country.json
 import argparse
 from math import floor
 from collections import defaultdict, Counter
@@ -9,7 +11,7 @@ import json
 
 def get_arg_parser():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data', type=str, default='/data/yury/dump/entity_rels', help='path to output directory')
+    parser.add_argument('--data', type=str, default='/data/yury/wikidata/entity_rels', help='path to output directory')
     parser.add_argument('--item', type=str, required=True, help='initial item value (e.g., Q6256 for country)')
     parser.add_argument('--property', type=str, required=True, help='initial property id (e.g., P31 for instance of)')
     parser.add_argument('--num_procs', type=int, default=50, help='Number of processes')
@@ -131,9 +133,18 @@ def search_distributor(item, property_id, data_files, num_procs, max_depth, min_
     if depth >= max_depth:
         return None
 
-    seen_items = seen_items or {item}
-    seen_properties = seen_properties or {property_id}
-    chain = chain or [[item, property_id]]
+    seen_items = seen_items or set()
+    seen_properties = seen_properties or set()
+    chain = chain or []
+
+    # Add current item and property to the chain
+    current_chain = chain + [[item, property_id]]
+
+
+    # Add current item and property to the seen sets
+    seen_items.add(item)
+    seen_properties.add(property_id)
+    chain.append([item, property_id])
 
     current_results, new_valid_qids, item_groups, filtered_data = next_q_p(item, property_id, data_files, filtered_data, num_procs, seen_properties=seen_properties, seen_items=seen_items, valid_qids=valid_qids)
 
@@ -150,29 +161,24 @@ def search_distributor(item, property_id, data_files, num_procs, max_depth, min_
     print(in_range_results)
 
     result = {
-        "chain": chain,
+        "chain": current_chain,
         "results": in_range_results,
         "item_groups": item_groups,
         "children": {}
     }
 
-    if not over_results:
-        return result
-
     for new_property, new_items in over_results.items():
         for new_item, count in new_items.items():
-            print(f"Adding to search: Property {new_property}, Item {new_item}, Count {count}")
-            new_seen_properties = seen_properties.copy()
-            new_seen_items = seen_items.copy()
-            new_seen_properties.add(new_property)
-            new_seen_items.add(new_item)
-            new_chain = chain + [[new_item, new_property]]
-            new_depth = depth + 1
-            child_result = search_distributor(new_item, new_property, data_files, num_procs, max_depth, min_group_size, max_group_size,
-                                              depth=new_depth, seen_items=new_seen_items, seen_properties=new_seen_properties, chain=new_chain,
-                                              valid_qids=valid_qids, filtered_data=filtered_data)
-            if child_result:
-                result["children"][f"{new_property}, {new_item}"] = child_result
+            if new_item not in seen_items and new_property not in seen_properties:
+                print(f"Adding to search: Property {new_property}, Item {new_item}, Count {count}")
+                new_depth = depth + 1
+                child_result = search_distributor(new_item, new_property, data_files, num_procs, max_depth, min_group_size, max_group_size,
+                                                  depth=new_depth, seen_items=seen_items, seen_properties=seen_properties, chain=current_chain,
+                                                  valid_qids=valid_qids, filtered_data=filtered_data)
+                if child_result:
+                    result["children"][f"{new_property}, {new_item}"] = child_result
+
+    # No need to pop from the chain here
 
     return result
 

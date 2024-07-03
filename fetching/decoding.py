@@ -7,8 +7,8 @@ from fetching.utils import jsonl_generator, get_batch_files
 
 def get_arg_parser():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--labels_dir', type=str, default='/data/yury/dump/labels', help='path to labels directory')
-    parser.add_argument('--properties_file', type=str, default='/data/yury/dump/properties/en.json', help='path to properties file')
+    parser.add_argument('--labels_dir', type=str, default='/data/yury/wikidata/labels', help='path to labels directory')
+    parser.add_argument('--properties_file', type=str, default='/data/yury/wikidata/properties/en.json', help='path to properties file')
     parser.add_argument('--input_json', type=str, required=True, help='Path to input JSON file')
     parser.add_argument('--output_json', type=str, required=True, help='Path to output JSON file')
     parser.add_argument('--num_procs', type=int, default=40, help='Number of processes')
