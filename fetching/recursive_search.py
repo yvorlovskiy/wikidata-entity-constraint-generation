@@ -91,7 +91,10 @@ def filter_results_by_count(filtered_results, min_group_size=10, max_group_size=
             filtered_property_bank[p] = filtered_q_counts
     return filtered_property_bank
 
-def next_q_p(item, property_id, data_files, filtered_data, num_procs, valid_qids=None, seen_properties={}, seen_items={}, min_group_size=20):
+def next_q_p(item, property_id, data_files, filtered_data, num_procs, valid_qids=None, seen_properties=None, seen_items=None, min_group_size=20):
+    seen_properties = seen_properties or set()
+    seen_items = seen_items or set()
+
     if valid_qids is None:
         print("First pass: Collecting triples")
         pool = Pool(processes=num_procs)
@@ -120,14 +123,13 @@ def next_q_p(item, property_id, data_files, filtered_data, num_procs, valid_qids
     property_bank = defaultdict(Counter)
     item_groups = defaultdict(lambda: defaultdict(list))
     for entry in tqdm(filtered_data, desc="Processing filtered data"):
-        if entry.get('qid') in valid_qids and entry.get('property_id') not in seen_properties:
+        if entry.get('qid') in valid_qids and entry.get('property_id') not in seen_properties and (entry.get('value'), entry.get('property_id')) not in seen_items:
             property_bank[entry.get('property_id')][entry.get('value')] += 1
             item_groups[entry.get('property_id')][entry.get('value')].append(entry.get('qid'))
     
     print("Filtering out seen items...")
     filtered_results = property_item_counts(property_bank, seen_items)
     return filtered_results, valid_qids, item_groups, filtered_data
-
 
 def search_distributor(item, property_id, data_files, num_procs, max_depth, min_group_size, max_group_size, depth=0, seen_items=None, seen_properties=None, chain=None, valid_qids=None, filtered_data=None):
     if depth >= max_depth:
@@ -137,14 +139,16 @@ def search_distributor(item, property_id, data_files, num_procs, max_depth, min_
     seen_properties = seen_properties or set()
     chain = chain or []
 
+    # Check if we've already seen this item-property pair
+    if (item, property_id) in seen_items or property_id in seen_properties:
+        return None
+
     # Add current item and property to the chain
     current_chain = chain + [[item, property_id]]
 
-
-    # Add current item and property to the seen sets
-    seen_items.add(item)
+    # Add current item-property pair to the seen sets
+    seen_items.add((item, property_id))
     seen_properties.add(property_id)
-    chain.append([item, property_id])
 
     current_results, new_valid_qids, item_groups, filtered_data = next_q_p(item, property_id, data_files, filtered_data, num_procs, seen_properties=seen_properties, seen_items=seen_items, valid_qids=valid_qids)
 
@@ -157,7 +161,7 @@ def search_distributor(item, property_id, data_files, num_procs, max_depth, min_
     over_results = filter_results_by_count(current_results, min_group_size=min_group_size * 2)
 
     print(f'Current depth: {depth}')
-    print(chain)
+    print(current_chain)
     print(in_range_results)
 
     result = {
@@ -169,7 +173,7 @@ def search_distributor(item, property_id, data_files, num_procs, max_depth, min_
 
     for new_property, new_items in over_results.items():
         for new_item, count in new_items.items():
-            if new_item not in seen_items and new_property not in seen_properties:
+            if (new_item, new_property) not in seen_items and new_property not in seen_properties:
                 print(f"Adding to search: Property {new_property}, Item {new_item}, Count {count}")
                 new_depth = depth + 1
                 child_result = search_distributor(new_item, new_property, data_files, num_procs, max_depth, min_group_size, max_group_size,
@@ -178,30 +182,39 @@ def search_distributor(item, property_id, data_files, num_procs, max_depth, min_
                 if child_result:
                     result["children"][f"{new_property}, {new_item}"] = child_result
 
-    # No need to pop from the chain here
-
     return result
 
 def convert_to_json_format(result):
-    def process_node(node):
-        chain = node["chain"]
-        current_key = ", ".join([f"{p}, {q}" for q, p in chain])
-        json_data = {current_key: {}}
+    def process_node(node, current_path):
+        json_data = {}
+        
+        # Construct the full path string from the chain
+        chain = node.get('chain', [])
+        path_string = " -> ".join([f"{p}, {q}" for q, p in chain])
+        
+        json_data[path_string] = {}
 
-        for property_id, items in node["results"].items():
-            json_data[current_key][property_id] = {}
+        for property_id, items in node['results'].items():
+            property_path = f"{path_string} -> {property_id}"
+            json_data[path_string][property_path] = {}
             for item, count in items.items():
-                json_data[current_key][property_id][item] = {
+                item_path = f"{property_path}, {item}"
+                json_data[path_string][property_path][item_path] = {
                     "count": count,
-                    "items": node["item_groups"].get(property_id, {}).get(item, [])[:]  # Limit to first 10 items
+                    "items": node["item_groups"].get(property_id, {}).get(item, [])[:10]  # Limit to first 10 items
                 }
 
-        for child_key, child_node in node["children"].items():
-            json_data[current_key][child_key] = process_node(child_node)
+        for child_key, child_node in node['children'].items():
+            child_data = process_node(child_node, chain)
+            json_data[path_string].update(child_data)
 
         return json_data
 
-    return process_node(result)
+    return process_node(result, [])
+
+def save_json_results(results, output_file):
+    with open(output_file, 'w') as f:
+        json.dump(results, f, indent=2)
 
 def save_json_results(results, output_file):
     with open(output_file, 'w') as f:
