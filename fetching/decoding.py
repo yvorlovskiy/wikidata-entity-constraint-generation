@@ -1,5 +1,6 @@
 import argparse
 import json
+import re
 from tqdm import tqdm
 from multiprocessing import Pool
 from functools import partial
@@ -33,16 +34,10 @@ def decode_term(term, labels, properties):
     return term
 
 def decode_key(key, labels, properties):
-    parts = key.split(',')
-    decoded_parts = []
-    for part in parts:
-        part = part.strip()
-        decoded_part = decode_term(part, labels, properties)
-        decoded_parts.append(decoded_part)
-        if part.startswith('Q') and decoded_part != part:
-            # Early exit if we've found and decoded a Q identifier
-            break
-    return ', '.join(decoded_parts)
+    def replace_match(match):
+        return decode_term(match.group(0), labels, properties)
+    
+    return re.sub(r'[PQ]\d+', replace_match, key)
 
 def decode_json(data, labels, properties):
     if isinstance(data, dict):
@@ -53,7 +48,7 @@ def decode_json(data, labels, properties):
     elif isinstance(data, list):
         return [decode_json(item, labels, properties) for item in data]
     elif isinstance(data, str):
-        return decode_term(data, labels, properties)
+        return decode_key(data, labels, properties)
     else:
         return data
 
@@ -62,7 +57,6 @@ def main():
 
     print("Loading labels...")
     label_files = get_batch_files(args.labels_dir)
-    
     pool = Pool(processes=args.num_procs)
     labels = {}
     for chunk_labels in tqdm(
@@ -71,7 +65,6 @@ def main():
         desc="Loading label files"
     ):
         labels.update(chunk_labels)
-
     print(f"Loaded {len(labels)} labels")
 
     print("Loading properties...")
@@ -81,20 +74,19 @@ def main():
     print("Loading and decoding input JSON...")
     with open(args.input_json, 'r') as infile:
         input_data = json.load(infile)
-    
+
     decoded_data = decode_json(input_data, labels, properties)
 
     print("Saving decoded JSON...")
     with open(args.output_json, 'w') as outfile:
         json.dump(decoded_data, outfile, indent=2)
-
     print(f"Decoded JSON saved to {args.output_json}")
 
     # Print a sample of the decoded data
     print("\nSample of decoded data:")
     sample = list(decoded_data.items())[:2]
     for k, v in sample:
-        print(f"{k}: {list(v.keys())[:3]}...")
+        print(f"{k}: {v}")
 
 if __name__ == "__main__":
     main()

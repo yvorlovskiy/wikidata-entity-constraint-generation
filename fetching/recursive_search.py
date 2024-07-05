@@ -185,37 +185,40 @@ def search_distributor(item, property_id, data_files, num_procs, max_depth, min_
     return result
 
 def convert_to_json_format(result):
-    def process_node(node, current_path):
-        json_data = {}
-        
-        # Construct the full path string from the chain
-        chain = node.get('chain', [])
-        path_string = " -> ".join([f"{p}, {q}" for q, p in chain])
-        
-        json_data[path_string] = {}
+    def format_chain(chain):
+        formatted_chain = []
+        for pair in chain:
+            if isinstance(pair, list) and len(pair) == 2:
+                formatted_chain.extend([f"[{pair[1]}]", f"[{pair[0]}]"])
+            elif isinstance(pair, str):
+                formatted_chain.append(f"[{pair}]")
+        return ", ".join(formatted_chain)
 
+    def process_node(node):
+        json_data = {}
+        chain = node.get('chain', [])
+        
+        path_string = format_chain(chain)
+        json_data[path_string] = {}
+        
         for property_id, items in node['results'].items():
-            property_path = f"{path_string} -> {property_id}"
+            property_path = f"{path_string}, [{property_id}]"
             json_data[path_string][property_path] = {}
+            
             for item, count in items.items():
-                item_path = f"{property_path}, {item}"
+                item_path = f"{property_path}, [{item}]"
                 json_data[path_string][property_path][item_path] = {
                     "count": count,
-                    "items": node["item_groups"].get(property_id, {}).get(item, [])[:10]  # Limit to first 10 items
+                    "items": node["item_groups"].get(property_id, {}).get(item, [])[:] # Limit to first 10 items
                 }
-
+        
         for child_key, child_node in node['children'].items():
-            child_data = process_node(child_node, chain)
+            child_data = process_node(child_node)
             json_data[path_string].update(child_data)
-
+        
         return json_data
-
-    return process_node(result, [])
-
-def save_json_results(results, output_file):
-    with open(output_file, 'w') as f:
-        json.dump(results, f, indent=2)
-
+    
+    return process_node(result)
 def save_json_results(results, output_file):
     with open(output_file, 'w') as f:
         json.dump(results, f, indent=2)
