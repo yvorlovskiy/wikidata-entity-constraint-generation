@@ -139,15 +139,16 @@ def search_distributor(item, property_id, data_files, num_procs, max_depth, min_
     seen_properties = seen_properties or set()
     chain = chain or []
 
-    # Check if we've already seen this item-property pair
-    if (item, property_id) in seen_items or property_id in seen_properties:
+    # Convert the chain to a tuple of tuples for hashability
+    chain_key = tuple((str(i), str(p)) for i, p in chain + [(item, property_id)])
+    if chain_key in seen_items:
         return None
 
     # Add current item and property to the chain
     current_chain = chain + [[item, property_id]]
 
-    # Add current item-property pair to the seen sets
-    seen_items.add((item, property_id))
+    # Add current chain to the seen sets
+    seen_items.add(chain_key)
     seen_properties.add(property_id)
 
     current_results, new_valid_qids, item_groups, filtered_data = next_q_p(item, property_id, data_files, filtered_data, num_procs, seen_properties=seen_properties, seen_items=seen_items, valid_qids=valid_qids)
@@ -173,12 +174,25 @@ def search_distributor(item, property_id, data_files, num_procs, max_depth, min_
 
     for new_property, new_items in over_results.items():
         for new_item, count in new_items.items():
-            if (new_item, new_property) not in seen_items and new_property not in seen_properties:
+            new_chain_key = tuple((str(i), str(p)) for i, p in current_chain + [(new_item, new_property)])
+            if new_chain_key not in seen_items and new_property not in seen_properties:
                 print(f"Adding to search: Property {new_property}, Item {new_item}, Count {count}")
                 new_depth = depth + 1
+                
+                # Filter valid_qids to only those that satisfy the entire chain
+                chain_valid_qids = valid_qids
+                for chain_item, chain_property in current_chain + [(new_item, new_property)]:
+                    chain_valid_qids = {qid for qid in chain_valid_qids if any(
+                        entry.get('qid') == qid and entry.get('property_id') == chain_property and entry.get('value') == chain_item
+                        for entry in filtered_data
+                    )}
+                
+                if not chain_valid_qids:
+                    continue  # Skip this branch if no QIDs satisfy the entire chain
+                
                 child_result = search_distributor(new_item, new_property, data_files, num_procs, max_depth, min_group_size, max_group_size,
                                                   depth=new_depth, seen_items=seen_items, seen_properties=seen_properties, chain=current_chain,
-                                                  valid_qids=valid_qids, filtered_data=filtered_data)
+                                                  valid_qids=chain_valid_qids, filtered_data=filtered_data)
                 if child_result:
                     result["children"][f"{new_property}, {new_item}"] = child_result
 
