@@ -1,0 +1,45 @@
+{
+    "FRENCH_SPEAKING_COUNTRIES": [
+      "Canada", "Belgium", "Switzerland", "France", "Vatican City",
+      "Chad", "Vanuatu", "Central African Republic", "Togo", "Benin",
+      "Burundi", "Comoros", "Republic of the Congo", "Democratic Republic of the Congo",
+      "Djibouti", "Gabon", "Guinea", "Ivory Coast", "Cameroon", "Madagascar",
+      "Mauritius", "Niger", "Rwanda", "Senegal", "Seychelles", "Monaco", "Lebanon",
+      "Equatorial Guinea", "Luxembourg"
+    ],
+    "OECD_MEMBER_COUNTRIES": [
+      "Australia", "Austria", "Belgium", "Canada", "Chile", 
+      "Colombia", "Costa Rica", "Czech Republic", "Denmark", "Estonia", 
+      "Finland", "France", "Germany", "Greece", "Hungary", 
+      "Iceland", "Ireland", "Israel", "Italy", "Japan", 
+      "Latvia", "Lithuania", "Luxembourg", "Mexico", "Netherlands", 
+      "New Zealand", "Norway", "Poland", "Portugal", "Slovakia", 
+      "Slovenia", "South Korea", "Spain", "Sweden", "Switzerland", 
+      "Turkey", "United Kingdom", "United States"
+    ],
+    "APEC_MEMBER_COUNTRIES": [
+      "United States", "Australia", "Brunei", "Canada", "Chile", 
+      "China", "Hong Kong", "Indonesia", "Japan", "Korea", 
+      "Malaysia", "Mexico", "New Zealand", "Papua New Guinea", "Peru", 
+      "Philippines", "Russia", "Singapore", "Chinese Taipei", "Thailand", "Vietnam"
+    ],
+    "EU_BORDERING_COUNTRIES": [
+      "Norway", "Switzerland", "Turkey", "Russia", "Belarus", 
+      "North Macedonia", "Albania", "Andorra", "Montenegro", "Vatican City", 
+      "Liechtenstein", "Morocco"
+    ],
+    "SPANISH_SPEAKING_COUNTRIES": [
+      "Spain", "Uruguay", "Mexico", "Cuba", "Chile", 
+      "Argentina", "Peru", "Venezuela", "Paraguay", "Ecuador", 
+      "Colombia", "Bolivia", "Guatemala", "Honduras", "Dominican Republic", 
+      "El Salvador", "Costa Rica", "Nicaragua", "Equatorial Guinea", "Panama",
+      "United States of America", "Catalonia", "Galicia"
+    ],
+    "ARABIC_SPEAKING_COUNTRIES": [
+      "Egypt", "Algeria", "Bahrain", "Chad", "Iraq", 
+      "Yemen", "Jordan", "Lebanon", "Oman", "Qatar", 
+      "Saudi Arabia", "Syria", "United Arab Emirates", "Afghanistan", "Tunisia", 
+      "South Sudan", "Comoros", "Djibouti", "Eritrea", "Libya", 
+      "Mauritania", "Morocco", "Somalia", "Sudan", "State of Palestine"
+    ]
+  }

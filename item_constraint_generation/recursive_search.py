@@ -1,7 +1,6 @@
 # example:
 # python3 fetching/recursive_search.py --item Q6256 --property P31 --test --output out/out_instance_country.json
 import argparse
-from math import floor
 from collections import defaultdict, Counter
 from functools import partial
 from multiprocessing import Pool
