@@ -1,4 +1,5 @@
 data/
-out/
+item_constraint_generation/out
 __pycache__/
 *.sh
+wikidata/

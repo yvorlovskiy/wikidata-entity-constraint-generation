@@ -47,7 +47,7 @@ def match_query_key(query_name: str) -> str:
     return query_mappings.get(query_name, "")
 
 # Load ground truth data
-GROUND_TRUTH = load_json('tests/recursive_search_ground_truth.json')
+GROUND_TRUTH = load_json('recursive_search_ground_truth.json')
 
 @pytest.mark.parametrize("query_name", [
     "FRENCH_SPEAKING_COUNTRIES",
@@ -59,7 +59,7 @@ GROUND_TRUTH = load_json('tests/recursive_search_ground_truth.json')
 ])
 def test_query_results(query_name: str):
     # Load results from file
-    results = load_json('out/out_instance_country_decoded.json')
+    results = load_json('../out/out_instance_country_decoded.json')
     
     # Match the query key
     query_key = match_query_key(query_name)

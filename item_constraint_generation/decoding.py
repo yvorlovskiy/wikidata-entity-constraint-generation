@@ -1,3 +1,4 @@
+# python3 decoding.py --labels_dir /data/yury/wikidata/labels --properties_file /data/yury/wikidata/properties/en.json --input_json input.json --output_json output_decoded.json
 import argparse
 import json
 import re
