@@ -1,2 +1,4 @@
 data/
+out/
 __pycache__/
+*.sh
