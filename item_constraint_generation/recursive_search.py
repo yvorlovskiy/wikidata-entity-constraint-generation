@@ -1,5 +1,5 @@
 # example:
-#  python3 item_constraint_generation/recursive_search.py --item Q6256 --property P31  --output item_constraint_generation/out/out_instance_country.json --test --blacklist item_constraint_generation/blacklist.json 
+#  python3 item_constraint_generation/recursive_search.py --initial_conditions "[(\'Q6256\', \'P31\')]" --output item_constraint_generation/out/out_instance_country.json --test --blacklist item_constraint_generation/blacklist.json 
 import argparse
 from collections import defaultdict, Counter
 from functools import partial
@@ -7,18 +7,18 @@ from multiprocessing import Pool
 from tqdm import tqdm
 from utils import jsonl_generator, get_batch_files
 import json
+import ast
 
 def get_arg_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument('--data', type=str, default='/data/yury/wikidata/entity_rels', help='path to output directory')
-    parser.add_argument('--item', type=str, required=True, help='initial item value (e.g., Q6256 for country)')
-    parser.add_argument('--property', type=str, required=True, help='initial property id (e.g., P31 for instance of)')
+    parser.add_argument('--initial_conditions', type=str, required=True, help='Initial conditions as a string representation of a list of tuples, e.g., "[(\'Q6256\', \'P31\')]"')
     parser.add_argument('--num_procs', type=int, default=50, help='Number of processes')
     parser.add_argument('--max_depth', type=int, default=3, help='Maximum recursive depth')
     parser.add_argument('--min_group_size', type=int, default=20, help='Minimum group size to consider')
     parser.add_argument('--test', action='store_true', help='Run in test mode (process only first 50 files)')
     parser.add_argument('--blacklist', type=str, required=False, help='Path to JSON file containing blacklisted properties and items')
-
+    parser.add_argument('--output', type=str, required=True, help='Output JSON file path')
     return parser
 
 def nested_dict():
@@ -43,20 +43,36 @@ def load_blacklist(blacklist_file):
         blacklist = json.load(f)
     return set(blacklist.get('properties', [])), set(blacklist.get('items', []))
 
-def find_qids(item, property_id, filename, valid_qids):
-    triples = []
+def find_qids(initial_conditions, filename, valid_qids):
+    qid_dict = {}
     try:
         for entry in jsonl_generator(filename):
             if not isinstance(entry, dict):
                 print(f"Expected dict, but got {type(entry)}: {entry}")
                 continue
-            if entry.get('property_id') == property_id and entry.get('value') == item:
-                if not valid_qids or entry.get('qid') in valid_qids:
-                    qid = entry.get('qid')
-                    triples.append((qid, property_id, item))
+            
+            qid = entry.get('qid')
+            if valid_qids and qid not in valid_qids:
+                continue
+            
+            prop = entry.get('property_id')
+            value = entry.get('value')
+            
+            if qid not in qid_dict:
+                qid_dict[qid] = set()
+            qid_dict[qid].add((prop, value))
+    
     except Exception as e:
         print(f"Error processing file {filename}: {e}")
-    return triples
+        return []
+
+    result_qids = set(qid_dict.keys())
+    for item, prop in initial_conditions:
+        result_qids &= {qid for qid, prop_values in qid_dict.items() if (prop, item) in prop_values}
+        if not result_qids:
+            return []
+
+    return [(qid, initial_conditions[-1][1], initial_conditions[-1][0]) for qid in result_qids]
 
 def filter_file(args):
     filename, valid_qids = args
@@ -97,7 +113,7 @@ def filter_results_by_count(filtered_results, min_group_size=10, max_group_size=
             filtered_property_bank[p] = filtered_q_counts
     return filtered_property_bank
 
-def next_q_p(item, property_id, data_files, filtered_data, num_procs, valid_qids=None, seen_properties=None, blacklisted_properties=None, seen_items=None, blacklisted_items=None, min_group_size=20):
+def next_q_p(item, property_id, data_files, filtered_data, num_procs, initial_conditions=None, valid_qids=None, seen_properties=None, blacklisted_properties=None, seen_items=None, blacklisted_items=None, min_group_size=20):
     seen_properties = seen_properties or set()
     seen_items = seen_items or set()
     blacklisted_properties = blacklisted_properties or set()
@@ -108,7 +124,7 @@ def next_q_p(item, property_id, data_files, filtered_data, num_procs, valid_qids
         pool = Pool(processes=num_procs)
         triple_results = list(tqdm(
             pool.imap_unordered(
-                partial(find_qids, item, property_id, valid_qids=None),
+                partial(find_qids, initial_conditions, valid_qids=None),
                 data_files
             ),
             total=len(data_files),
@@ -144,7 +160,7 @@ def next_q_p(item, property_id, data_files, filtered_data, num_procs, valid_qids
     filtered_results = property_item_counts(property_bank, seen_items.union(blacklisted_items))
     return filtered_results, valid_qids, item_groups, filtered_data
 
-def search_distributor(item, property_id, data_files, num_procs, max_depth, min_group_size, max_group_size, blacklisted_items=None, blacklisted_properties=None, depth=0, seen_items=None, seen_properties=None, chain=None, valid_qids=None, filtered_data=None):
+def search_distributor(initial_conditions, data_files, num_procs, max_depth, min_group_size, max_group_size, blacklisted_items=None, blacklisted_properties=None, depth=0, seen_items=None, seen_properties=None, chain=None, valid_qids=None, filtered_data=None):
     if depth >= max_depth:
         return None
 
@@ -154,10 +170,19 @@ def search_distributor(item, property_id, data_files, num_procs, max_depth, min_
     blacklisted_properties = blacklisted_properties or set()
     chain = chain or []
 
+    if depth == 0:
+        # First pass: use initial_conditions
+        item, property_id = initial_conditions[-1]  # Use the last condition for the first pass
+    else:
+        # Subsequent passes: use regular item-property pairs
+        item, property_id = initial_conditions
+
     # Convert the chain to a tuple of tuples for hashability
     chain_key = tuple((str(i), str(p)) for i, p in chain + [(item, property_id)])
     if chain_key in seen_items or item in blacklisted_items or property_id in blacklisted_properties:
         return None
+
+    print(f'Chain key {chain_key}')
 
     # Add current item and property to the chain
     current_chain = chain + [[item, property_id]]
@@ -166,7 +191,10 @@ def search_distributor(item, property_id, data_files, num_procs, max_depth, min_
     seen_items.add(chain_key)
     seen_properties.add(property_id)
 
-    current_results, new_valid_qids, item_groups, filtered_data = next_q_p(item, property_id, data_files, filtered_data, num_procs, seen_properties=seen_properties, blacklisted_properties=blacklisted_properties, seen_items=seen_items, blacklisted_items=blacklisted_items, valid_qids=valid_qids)
+    if depth == 0:
+        current_results, new_valid_qids, item_groups, filtered_data = next_q_p(item, property_id, data_files, filtered_data, num_procs, initial_conditions=initial_conditions, seen_properties=seen_properties, blacklisted_properties=blacklisted_properties, seen_items=seen_items, blacklisted_items=blacklisted_items, valid_qids=valid_qids)
+    else:
+        current_results, new_valid_qids, item_groups, filtered_data = next_q_p(item, property_id, data_files, filtered_data, num_procs, seen_properties=seen_properties, blacklisted_properties=blacklisted_properties, seen_items=seen_items, blacklisted_items=blacklisted_items, valid_qids=valid_qids)
 
     if valid_qids is None:
         valid_qids = new_valid_qids
@@ -208,7 +236,7 @@ def search_distributor(item, property_id, data_files, num_procs, max_depth, min_
                 if not chain_valid_qids:
                     continue  # Skip this branch if no QIDs satisfy the entire chain
                 
-                child_result = search_distributor(new_item, new_property, data_files, num_procs, max_depth, 
+                child_result = search_distributor((new_item, new_property), data_files, num_procs, max_depth, 
                                                   min_group_size, max_group_size, blacklisted_items, 
                                                   blacklisted_properties, depth=new_depth, seen_items=seen_items, 
                                                   seen_properties=seen_properties, chain=current_chain,
@@ -253,13 +281,13 @@ def convert_to_json_format(result):
         return json_data
     
     return process_node(result)
+
 def save_json_results(results, output_file):
     with open(output_file, 'w') as f:
         json.dump(results, f, indent=2)
 
 def main():
     parser = get_arg_parser()
-    parser.add_argument('--output', type=str, required=True, help='Output JSON file path')
     args = parser.parse_args()
     blacklisted_properties, blacklisted_items = load_blacklist(args.blacklist) if args.blacklist else (set(), set())
 
@@ -267,10 +295,14 @@ def main():
     if args.test:
         data_files = data_files[:50]
     
-    result = search_distributor(args.item, args.property, data_files, args.num_procs, max_depth=args.max_depth, 
+    initial_conditions = ast.literal_eval(args.initial_conditions)
+    # Convert the list of dictionaries to a list of tuples
+    initial_conditions = [(condition['item'], condition['property']) for condition in initial_conditions]
+    
+    result = search_distributor(initial_conditions, data_files, args.num_procs, max_depth=args.max_depth, 
                                 min_group_size=args.min_group_size, max_group_size=args.min_group_size*2,
                                 blacklisted_items=blacklisted_items, blacklisted_properties=blacklisted_properties)
-        
+    
     if result:
         json_results = convert_to_json_format(result)
         save_json_results(json_results, args.output)
