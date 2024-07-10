@@ -1,11 +1,11 @@
 # example:
-# python3 fetching/recursive_search.py --item Q6256 --property P31 --test --output out/out_instance_country.json
+#  python3 item_constraint_generation/recursive_search.py --item Q6256 --property P31  --output item_constraint_generation/out/out_instance_country.json --test --blacklist item_constraint_generation/blacklist.json 
 import argparse
 from collections import defaultdict, Counter
 from functools import partial
 from multiprocessing import Pool
 from tqdm import tqdm
-from fetching.utils import jsonl_generator, get_batch_files
+from utils import jsonl_generator, get_batch_files
 import json
 
 def get_arg_parser():
@@ -17,6 +17,8 @@ def get_arg_parser():
     parser.add_argument('--max_depth', type=int, default=3, help='Maximum recursive depth')
     parser.add_argument('--min_group_size', type=int, default=20, help='Minimum group size to consider')
     parser.add_argument('--test', action='store_true', help='Run in test mode (process only first 50 files)')
+    parser.add_argument('--blacklist', type=str, required=False, help='Path to JSON file containing blacklisted properties and items')
+
     return parser
 
 def nested_dict():
@@ -35,6 +37,11 @@ def merge_dictionaries(dict_list):
             for prop, values in props.items():
                 merged[qid][prop].update(values)
     return merged
+
+def load_blacklist(blacklist_file):
+    with open(blacklist_file, 'r') as f:
+        blacklist = json.load(f)
+    return set(blacklist.get('properties', [])), set(blacklist.get('items', []))
 
 def find_qids(item, property_id, filename, valid_qids):
     triples = []
@@ -90,9 +97,11 @@ def filter_results_by_count(filtered_results, min_group_size=10, max_group_size=
             filtered_property_bank[p] = filtered_q_counts
     return filtered_property_bank
 
-def next_q_p(item, property_id, data_files, filtered_data, num_procs, valid_qids=None, seen_properties=None, seen_items=None, min_group_size=20):
+def next_q_p(item, property_id, data_files, filtered_data, num_procs, valid_qids=None, seen_properties=None, blacklisted_properties=None, seen_items=None, blacklisted_items=None, min_group_size=20):
     seen_properties = seen_properties or set()
     seen_items = seen_items or set()
+    blacklisted_properties = blacklisted_properties or set()
+    blacklisted_items = blacklisted_items or set()
 
     if valid_qids is None:
         print("First pass: Collecting triples")
@@ -122,25 +131,32 @@ def next_q_p(item, property_id, data_files, filtered_data, num_procs, valid_qids
     property_bank = defaultdict(Counter)
     item_groups = defaultdict(lambda: defaultdict(list))
     for entry in tqdm(filtered_data, desc="Processing filtered data"):
-        if entry.get('qid') in valid_qids and entry.get('property_id') not in seen_properties and (entry.get('value'), entry.get('property_id')) not in seen_items:
+        if (entry.get('qid') in valid_qids and
+            entry.get('property_id') not in seen_properties and
+            entry.get('property_id') not in blacklisted_properties and
+            entry.get('value') not in seen_items and
+            entry.get('value') not in blacklisted_items and
+            (entry.get('value'), entry.get('property_id')) not in seen_items):
             property_bank[entry.get('property_id')][entry.get('value')] += 1
             item_groups[entry.get('property_id')][entry.get('value')].append(entry.get('qid'))
     
-    print("Filtering out seen items...")
-    filtered_results = property_item_counts(property_bank, seen_items)
+    print("Filtering out seen and blacklisted items...")
+    filtered_results = property_item_counts(property_bank, seen_items.union(blacklisted_items))
     return filtered_results, valid_qids, item_groups, filtered_data
 
-def search_distributor(item, property_id, data_files, num_procs, max_depth, min_group_size, max_group_size, depth=0, seen_items=None, seen_properties=None, chain=None, valid_qids=None, filtered_data=None):
+def search_distributor(item, property_id, data_files, num_procs, max_depth, min_group_size, max_group_size, blacklisted_items=None, blacklisted_properties=None, depth=0, seen_items=None, seen_properties=None, chain=None, valid_qids=None, filtered_data=None):
     if depth >= max_depth:
         return None
 
     seen_items = seen_items or set()
     seen_properties = seen_properties or set()
+    blacklisted_items = blacklisted_items or set()
+    blacklisted_properties = blacklisted_properties or set()
     chain = chain or []
 
     # Convert the chain to a tuple of tuples for hashability
     chain_key = tuple((str(i), str(p)) for i, p in chain + [(item, property_id)])
-    if chain_key in seen_items:
+    if chain_key in seen_items or item in blacklisted_items or property_id in blacklisted_properties:
         return None
 
     # Add current item and property to the chain
@@ -150,7 +166,7 @@ def search_distributor(item, property_id, data_files, num_procs, max_depth, min_
     seen_items.add(chain_key)
     seen_properties.add(property_id)
 
-    current_results, new_valid_qids, item_groups, filtered_data = next_q_p(item, property_id, data_files, filtered_data, num_procs, seen_properties=seen_properties, seen_items=seen_items, valid_qids=valid_qids)
+    current_results, new_valid_qids, item_groups, filtered_data = next_q_p(item, property_id, data_files, filtered_data, num_procs, seen_properties=seen_properties, blacklisted_properties=blacklisted_properties, seen_items=seen_items, blacklisted_items=blacklisted_items, valid_qids=valid_qids)
 
     if valid_qids is None:
         valid_qids = new_valid_qids
@@ -174,7 +190,10 @@ def search_distributor(item, property_id, data_files, num_procs, max_depth, min_
     for new_property, new_items in over_results.items():
         for new_item, count in new_items.items():
             new_chain_key = tuple((str(i), str(p)) for i, p in current_chain + [(new_item, new_property)])
-            if new_chain_key not in seen_items and new_property not in seen_properties:
+            if (new_chain_key not in seen_items and
+                new_property not in seen_properties and
+                new_item not in blacklisted_items and
+                new_property not in blacklisted_properties):
                 print(f"Adding to search: Property {new_property}, Item {new_item}, Count {count}")
                 new_depth = depth + 1
                 
@@ -189,8 +208,10 @@ def search_distributor(item, property_id, data_files, num_procs, max_depth, min_
                 if not chain_valid_qids:
                     continue  # Skip this branch if no QIDs satisfy the entire chain
                 
-                child_result = search_distributor(new_item, new_property, data_files, num_procs, max_depth, min_group_size, max_group_size,
-                                                  depth=new_depth, seen_items=seen_items, seen_properties=seen_properties, chain=current_chain,
+                child_result = search_distributor(new_item, new_property, data_files, num_procs, max_depth, 
+                                                  min_group_size, max_group_size, blacklisted_items, 
+                                                  blacklisted_properties, depth=new_depth, seen_items=seen_items, 
+                                                  seen_properties=seen_properties, chain=current_chain,
                                                   valid_qids=chain_valid_qids, filtered_data=filtered_data)
                 if child_result:
                     result["children"][f"{new_property}, {new_item}"] = child_result
@@ -240,12 +261,16 @@ def main():
     parser = get_arg_parser()
     parser.add_argument('--output', type=str, required=True, help='Output JSON file path')
     args = parser.parse_args()
+    blacklisted_properties, blacklisted_items = load_blacklist(args.blacklist) if args.blacklist else (set(), set())
+
     data_files = get_batch_files(args.data)
     if args.test:
         data_files = data_files[:50]
     
-    result = search_distributor(args.item, args.property, data_files, args.num_procs, max_depth=args.max_depth, min_group_size=args.min_group_size, max_group_size=args.min_group_size*2)
-    
+    result = search_distributor(args.item, args.property, data_files, args.num_procs, max_depth=args.max_depth, 
+                                min_group_size=args.min_group_size, max_group_size=args.min_group_size*2,
+                                blacklisted_items=blacklisted_items, blacklisted_properties=blacklisted_properties)
+        
     if result:
         json_results = convert_to_json_format(result)
         save_json_results(json_results, args.output)
