@@ -171,21 +171,25 @@ def search_distributor(initial_conditions, data_files, num_procs, max_depth, min
     chain = chain or []
 
     if depth == 0:
-        # First pass: use initial_conditions
-        item, property_id = initial_conditions[-1]  # Use the last condition for the first pass
+        # First pass: use initial_conditions and add them to seen items, seen properties, and chain
+        for initial_item, initial_prop in initial_conditions:
+            seen_items.add((initial_item, initial_prop))
+            seen_properties.add(initial_prop)
+            chain.append([initial_item, initial_prop])
+        item, property_id = initial_conditions[-1]
     else:
         # Subsequent passes: use regular item-property pairs
         item, property_id = initial_conditions
+        # Only add the item and property to the chain if they are not the same as the last item and property
+        if chain[-1] != [item, property_id]:
+            chain.append([item, property_id])
 
     # Convert the chain to a tuple of tuples for hashability
-    chain_key = tuple((str(i), str(p)) for i, p in chain + [(item, property_id)])
+    chain_key = tuple((str(i), str(p)) for i, p in chain)
     if chain_key in seen_items or item in blacklisted_items or property_id in blacklisted_properties:
         return None
 
     print(f'Chain key {chain_key}')
-
-    # Add current item and property to the chain
-    current_chain = chain + [[item, property_id]]
 
     # Add current chain to the seen sets
     seen_items.add(chain_key)
@@ -205,11 +209,11 @@ def search_distributor(initial_conditions, data_files, num_procs, max_depth, min
     over_results = filter_results_by_count(current_results, min_group_size=min_group_size * 2)
 
     print(f'Current depth: {depth}')
-    print(current_chain)
+    print(chain)
     print(in_range_results)
 
     result = {
-        "chain": current_chain,
+        "chain": chain,
         "results": in_range_results,
         "item_groups": item_groups,
         "children": {}
@@ -217,7 +221,7 @@ def search_distributor(initial_conditions, data_files, num_procs, max_depth, min
 
     for new_property, new_items in over_results.items():
         for new_item, count in new_items.items():
-            new_chain_key = tuple((str(i), str(p)) for i, p in current_chain + [(new_item, new_property)])
+            new_chain_key = tuple((str(i), str(p)) for i, p in chain + [[new_item, new_property]])
             if (new_chain_key not in seen_items and
                 new_property not in seen_properties and
                 new_item not in blacklisted_items and
@@ -227,7 +231,7 @@ def search_distributor(initial_conditions, data_files, num_procs, max_depth, min
                 
                 # Filter valid_qids to only those that satisfy the entire chain
                 chain_valid_qids = valid_qids
-                for chain_item, chain_property in current_chain + [(new_item, new_property)]:
+                for chain_item, chain_property in chain + [[new_item, new_property]]:
                     chain_valid_qids = {qid for qid in chain_valid_qids if any(
                         entry.get('qid') == qid and entry.get('property_id') == chain_property and entry.get('value') == chain_item
                         for entry in filtered_data
@@ -239,7 +243,7 @@ def search_distributor(initial_conditions, data_files, num_procs, max_depth, min
                 child_result = search_distributor((new_item, new_property), data_files, num_procs, max_depth, 
                                                   min_group_size, max_group_size, blacklisted_items, 
                                                   blacklisted_properties, depth=new_depth, seen_items=seen_items, 
-                                                  seen_properties=seen_properties, chain=current_chain,
+                                                  seen_properties=seen_properties, chain=chain + [[new_item, new_property]],
                                                   valid_qids=chain_valid_qids, filtered_data=filtered_data)
                 if child_result:
                     result["children"][f"{new_property}, {new_item}"] = child_result
